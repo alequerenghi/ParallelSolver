@@ -1,0 +1,5 @@
+# mkdocs site
+/site
+/docs/build
+*.mem
+Manifest.toml
