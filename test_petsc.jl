@@ -21,15 +21,15 @@ end
 
 function juliasolve(xj, Sj, bj)
     Si = ilu(Sj)
-    bicgstabl!(xj, Sj, bj, 1; reltol=1e-8, Pl=Si, log=true, verbose=iszero(MPI.Comm_rank(comm)))
-    res_vec = DistributedVector(zeros(Float64, size(Sj.loc, 1)), Sj.comm)
-    mul!(res_vec, Sj, xj)
-    res_vec.loc .= bj.loc .- res_vec.loc
+    bicgstabl!(xj, Sj, bj, 1; reltol=1e-8, Pl=Si, log=false, verbose=false)
+    # res_vec = DistributedVector(zeros(Float64, size(Sj.loc, 1)), Sj.comm)
+    # mul!(res_vec, Sj, xj)
+    # res_vec.loc .= bj.loc .- res_vec.loc
 
-    true_rel_res = norm(res_vec) / norm(bj)
-    if MPI.Comm_rank(Sj.comm) == 0
-        println("True Relative Residual: ", true_rel_res)
-    end
+    # true_rel_res = norm(res_vec) / norm(bj)
+    # if MPI.Comm_rank(Sj.comm) == 0
+    #     println("True Relative Residual: ", true_rel_res)
+    # end
 end
 
 function getrange(N::Integer, myrank::Integer, commsize::Integer)
@@ -37,6 +37,58 @@ function getrange(N::Integer, myrank::Integer, commsize::Integer)
     start_idx = (myrank - 1) * q + min(myrank - 1, r) + 1
     len = q + (myrank <= r ? 1 : 0)
     return start_idx:(start_idx + len - 1)
+end
+
+function Laplace_2D_5P_slice(n::Int, row_range::UnitRange{Int})
+    N_global = n^2
+    N_local  = length(row_range)
+    
+    # Pre-allocate COO arrays (approx. 5 non-zeros per row)
+    nnz_est = 5 * N_local
+    I = sizehint!(Int[], nnz_est)      # Local row indices: 1 .. N_local
+    J = sizehint!(Int[], nnz_est)      # Global column indices: 1 .. N_global
+    V = sizehint!(Float64[], nnz_est)  # Stencil values
+    
+    for (i_loc, i_glob) in enumerate(row_range)
+        # Convert global row index to 2D grid coordinates (1-based)
+        r = div(i_glob - 1, n) + 1
+        c = mod(i_glob - 1, n) + 1
+        
+        # Center (diagonal)
+        push!(I, i_loc)
+        push!(J, i_glob)
+        push!(V, 4.0)
+        
+        # Left neighbor
+        if c > 1
+            push!(I, i_loc)
+            push!(J, i_glob - 1)
+            push!(V, -1.0)
+        end
+        
+        # Right neighbor
+        if c < n
+            push!(I, i_loc)
+            push!(J, i_glob + 1)
+            push!(V, -1.0)
+        end
+        
+        # Bottom neighbor
+        if r > 1
+            push!(I, i_loc)
+            push!(J, i_glob - n)
+            push!(V, -1.0)
+        end
+        
+        # Top neighbor
+        if r < n
+            push!(I, i_loc)
+            push!(J, i_glob + n)
+            push!(V, -1.0)
+        end
+    end
+    
+    return sparse(I, J, V, N_local, N_global)
 end
 
 MPI.Init()
@@ -48,20 +100,13 @@ comm = MPI.COMM_WORLD
 myrank = MPI.Comm_rank(comm)+1
 commsize  = MPI.Comm_size(comm)
 
-n = 2000
+n = 500
 dims = n^2
 
 
-S = nothing
-for rank ∈ 1:commsize
-    if rank == myrank
-        global S
-        S = Laplace_2D_5P(n)
-        myrange = getrange(S.m, myrank, commsize)
-        S = S[myrange, :]
-    end
-    MPI.Barrier(comm)
-end
+myrange = getrange(n^2, myrank, commsize)
+S = Laplace_2D_5P_slice(n, myrange)
+
 
 A = DistributedMatrix(S, comm)
 println("assembled!")
@@ -75,7 +120,8 @@ xp = similar(b)
 # t = @benchmark PETScsolve($xp, $S, $b, $comm) setup=fill!($xp, 0.0)
 # display(t)
 
-juliasolve(xj, A, b) # setup=fill!(xj, 0.0)
+bench = @benchmarkable juliasolve($xj, $A, $b) setup=fill!(xj, 0.0)
+t = run(bench; evals=1, seconds=60, samples=100)
 
 # display(tj)
 
