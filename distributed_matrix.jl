@@ -1,17 +1,26 @@
+using Printf
+using IterativeSolvers
 using IncompleteLU
 using MPI
 using LinearAlgebra
 using SparseArrays
 
-struct DistributedVector{T} <: AbstractVector{T}
-    loc::Vector{T}
+struct DistributedArray{T,N,A <: AbstractArray{T,N}} <: AbstractArray{T,N}
+    loc::A
     comm::MPI.Comm
 end
 
-Base.size(x::DistributedVector) = size(x.loc)
-Base.getindex(x::DistributedVector, i::Int) = x.loc[i]
-Base.setindex!(x::DistributedVector, v, i::Int) = (x.loc[i] = v)
-Base.similar(x::DistributedVector, ::Type{S}) where {S} = DistributedVector(similar(x.loc, S), x.comm)
+const DistributedVector{T,A} = DistributedArray{T,1,A}
+
+DistributedArray(loc::AbstractArray{T,N}, comm::MPI.Comm) where {T,N} = DistributedArray{T,N,typeof(loc)}(loc, comm)
+
+Base.size(x::DistributedArray) = size(x.loc)
+Base.size(x::DistributedArray) = size(x.loc)
+Base.getindex(x::DistributedArray, I::Vararg{Int, N}) where {N} = getindex(A.loc, I...)
+Base.setindex!(x::DistributedArray, v, I::Vararg{Int, N}) where {N} = setindex!(A.loc, v, I...)
+Base.IndexStyle(::Type{<:DistributedArray{T, N, A}}) where {T, N, A} = IndexStyle(A)
+Base.similar(A::DistributedArray, ::Type{S}, dims::Dims) where {S} = 
+    DistributedArray(similar(A.loc, S, dims), A.comm)
 
 function LinearAlgebra.dot(x::DistributedVector{T}, y::DistributedVector{T}) where {T}
     local_dot = dot(x.loc, y.loc)
@@ -226,3 +235,92 @@ IncompleteLU.ilu(M::DistributedMatrix{Tv,Ti}; τ=1e-3) where {Tv,Ti} = ilu(M.loc
 Base.size(M::DistributedMatrix) = (M.loc.m, M.loc.n)
 Base.size(M::DistributedMatrix, d::Integer) = d == 1 ? M.loc.m : (2 == d ? A.loc.n : 1)
 
+function bicgstabl_iterator!(x, A, b, comm::MPI.Comm, l::Int = 2;
+                             Pl = Identity(),
+                             max_mv_products = size(A, 2),
+                             abstol::Real = zero(real(eltype(b))),
+                             reltol::Real = sqrt(eps(real(eltype(b)))),
+                             initial_zero = false)
+    T = eltype(x)
+    n = size(A, 1)
+    mv_products = 0
+
+    # Large vectors.
+    # Should become distributed
+    r_shadow = DistributedVector(rand(T, n), comm)
+    # Also must become distributed
+    rs = DistributedArray(Matrix{T}(undef, n, l + 1), comm)
+    us = DistributedArray(zeros(T, n, l + 1), comm)
+
+    residual = view(rs, :, 1)
+
+    # Compute the initial residual rs[:, 1] = b - A * x
+    # Avoid computing A * 0.
+    if initial_zero
+        copyto!(residual, b)
+    else
+        mul!(residual, A, x)
+        residual .= b .- residual
+        mv_products += 1
+    end
+
+    # Apply the left preconditioner
+    ldiv!(Pl, residual)
+
+    γ = DistributedVector(zeros(T, l), comm)
+    ω = σ = one(T)
+
+    nrm = norm(residual)
+
+    # For the least-squares problem
+    M = zeros(T, l + 1, l + 1)
+
+    # Stopping condition based on absolute and relative tolerance.
+    tolerance = max(reltol * nrm, abstol)
+
+    BiCGStabIterable(A, l, x, r_shadow, rs, us,
+        max_mv_products, mv_products, tolerance, nrm,
+        Pl,
+        γ, ω, σ, M
+    )
+end
+
+function IterativeSolvers.bicgstabl!(x, A, b, comm::MPI.Comm, l = 2;
+                    abstol::Real = zero(real(eltype(b))),
+                    reltol::Real = sqrt(eps(real(eltype(b)))),
+                    max_mv_products::Int = size(A, 2),
+                    log::Bool = false,
+                    verbose::Bool = false,
+                    Pl = Identity(),
+                    kwargs...)
+    history = ConvergenceHistory(partial = !log)
+    history[:abstol] = abstol
+    history[:reltol] = reltol
+
+    # This doesn't yet make sense: the number of iters is smaller.
+    log && reserve!(history, :resnorm, max_mv_products)
+
+    # Actually perform iterative solve
+    iterable = bicgstabl_iterator!(x, A, b, l, comm; Pl = Pl,
+                                   abstol = abstol, reltol = reltol,
+                                   max_mv_products = max_mv_products, kwargs...)
+
+    if log
+        history.mvps = iterable.mv_products
+    end
+
+    for (iteration, item) = enumerate(iterable)
+        if log
+            nextiter!(history)
+            history.mvps = iterable.mv_products
+            push!(history, :resnorm, iterable.residual)
+        end
+        verbose && @printf("%3d\t%1.2e\n", iteration, iterable.residual)
+    end
+
+    verbose && println()
+    log && setconv(history, converged(iterable))
+    log && shrink!(history)
+
+    log ? (iterable.x, history) : iterable.x
+end

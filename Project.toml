@@ -6,7 +6,8 @@ MPI = "da04e1cc-30fd-572f-bb4f-1f8673147195"
 PETSc = "ace2c81b-2b5f-4b1e-a30d-d662738edfe0"
 
 [sources]
-PETSc = {path = "/home/aquerenghi/.julia/dev/PETSc"}
+IncompleteLU = {path = "/Users/alessandroquerenghi/.julia/dev/IncompleteLU"}
+IterativeSolvers = {path = "/Users/alessandroquerenghi/.julia/dev/IterativeSolvers"}
 
 [compat]
 MPI = "0.20.27"

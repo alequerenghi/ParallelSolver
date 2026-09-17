@@ -35,7 +35,9 @@ function bicgstabl_iterator!(x, A, b, l::Int = 2;
     mv_products = 0
 
     # Large vectors.
+    # Should become distributed
     r_shadow = rand(T, n)
+    # Also must become distributed
     rs = Matrix{T}(undef, n, l + 1)
     us = zeros(T, n, l + 1)
 
