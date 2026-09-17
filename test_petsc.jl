@@ -21,7 +21,15 @@ end
 
 function juliasolve(xj, Sj, bj)
     Si = ilu(Sj)
-    bicgstabl!(xj, Sj, bj, 1; reltol=1e-8, Pl=Si, log=true, verbose=false)
+    bicgstabl!(xj, Sj, bj, 1; reltol=1e-8, Pl=Si, log=true, verbose=iszero(MPI.Comm_rank(comm)))
+    res_vec = DistributedVector(zeros(Float64, size(Sj.loc, 1)), Sj.comm)
+    mul!(res_vec, Sj, xj)
+    res_vec.loc .= bj.loc .- res_vec.loc
+
+    true_rel_res = norm(res_vec) / norm(bj)
+    if MPI.Comm_rank(Sj.comm) == 0
+        println("True Relative Residual: ", true_rel_res)
+    end
 end
 
 function getrange(N::Integer, myrank::Integer, commsize::Integer)
@@ -40,7 +48,7 @@ comm = MPI.COMM_WORLD
 myrank = MPI.Comm_rank(comm)+1
 commsize  = MPI.Comm_size(comm)
 
-n = 1000
+n = 2000
 dims = n^2
 
 
@@ -56,6 +64,7 @@ for rank ∈ 1:commsize
 end
 
 A = DistributedMatrix(S, comm)
+println("assembled!")
 
 
 

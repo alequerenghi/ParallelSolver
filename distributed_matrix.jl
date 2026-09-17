@@ -13,21 +13,35 @@ end
 const DistributedVector{T,A} = DistributedArray{T,1,A}
 
 DistributedArray(loc::AbstractArray{T,N}, comm::MPI.Comm) where {T,N} = DistributedArray{T,N,typeof(loc)}(loc, comm)
+DistributedVector(loc::AbstractVector{T}, comm::MPI.Comm) where {T} = DistributedArray(loc, comm)
+DistributedVector{T}(loc::AbstractVector{T}, comm::MPI.Comm) where {T} = DistributedArray(loc, comm)
 
 Base.size(x::DistributedArray) = size(x.loc)
-Base.size(x::DistributedArray) = size(x.loc)
-Base.getindex(x::DistributedArray, I::Vararg{Int, N}) where {N} = getindex(A.loc, I...)
-Base.setindex!(x::DistributedArray, v, I::Vararg{Int, N}) where {N} = setindex!(A.loc, v, I...)
+Base.getindex(x::DistributedArray, I::Vararg{Int, N}) where {N} = getindex(x.loc, I...)
+Base.setindex!(x::DistributedArray, v, I::Vararg{Int, N}) where {N} = setindex!(x.loc, v, I...)
 Base.IndexStyle(::Type{<:DistributedArray{T, N, A}}) where {T, N, A} = IndexStyle(A)
 Base.similar(A::DistributedArray, ::Type{S}, dims::Dims) where {S} = 
     DistributedArray(similar(A.loc, S, dims), A.comm)
 
-function LinearAlgebra.dot(x::DistributedVector{T}, y::DistributedVector{T}) where {T}
-    local_dot = dot(x.loc, y.loc)
-    return MPI.Allreduce(local_dot, MPI.SUM, x.comm)
+@inline local_slice(v::AbstractArray) = v 
+@inline local_slice(v::DistributedArray) = v.loc
+# @inline local_slice(v::SubArray{T,N,<:Vector}) where {T,N} = v
+@inline local_slice(v::SubArray{T,N,<:DistributedArray}) where {T,N} = view(v.parent.loc, parentindices(v)...)
+
+@inline get_comm(v::DistributedArray) = v.comm
+@inline get_comm(v::SubArray{T,N,<:DistributedArray}) where {T,N} = parent(v).comm
+
+function LinearAlgebra.dot(
+    x::Union{DistributedArray{T, N}, SubArray{T, N, <:DistributedArray}}, 
+    y::Union{DistributedArray{T, N}, SubArray{T, N, <:DistributedArray}}
+) where {T, N}
+    local_dot = dot(local_slice(x), local_slice(y))
+    return MPI.Allreduce(local_dot, MPI.SUM, get_comm(x))
 end
 
-function LinearAlgebra.norm(x::DistributedVector{T}) where {T}
+function LinearAlgebra.norm(
+    x::Union{DistributedArray{T, N}, SubArray{T, N, <:DistributedArray}}
+) where {T, N}
     return sqrt(dot(x, x))
 end
 
@@ -205,11 +219,6 @@ function ghostexchange!(A::DistributedMatrix{Tv,Ti}, x::AbstractVector{Tv}) wher
     return reqs
 end
 
-@inline local_slice(v::AbstractVector) = v 
-@inline local_slice(v::SubArray{T,N,<:Vector}) where {T,N} = v
-@inline local_slice(v::DistributedVector) = v.loc
-@inline local_slice(v::SubArray{T,N,<:DistributedVector}) where {T,N} = view(v.parent.loc, parentindices(v))
-
 function LinearAlgebra.mul!(y::AbstractVector{Tv}, M::DistributedMatrix{Tv,Ti}, x::AbstractVector{Tv}) where {Tv,Ti}
     yloc  = local_slice(y)
     xloc  = local_slice(x)
@@ -233,14 +242,15 @@ end
 IncompleteLU.ilu(M::DistributedMatrix{Tv,Ti}; τ=1e-3) where {Tv,Ti} = ilu(M.loc; τ)
 
 Base.size(M::DistributedMatrix) = (M.loc.m, M.loc.n)
-Base.size(M::DistributedMatrix, d::Integer) = d == 1 ? M.loc.m : (2 == d ? A.loc.n : 1)
+Base.size(M::DistributedMatrix, d::Integer) = d == 1 ? M.loc.m : (2 == d ? M.loc.n : 1)
 
-function bicgstabl_iterator!(x, A, b, comm::MPI.Comm, l::Int = 2;
+function IterativeSolvers.bicgstabl_iterator!(x, A::DistributedMatrix, b, l::Int = 2;
                              Pl = Identity(),
                              max_mv_products = size(A, 2),
                              abstol::Real = zero(real(eltype(b))),
                              reltol::Real = sqrt(eps(real(eltype(b)))),
                              initial_zero = false)
+    comm = A.comm
     T = eltype(x)
     n = size(A, 1)
     mv_products = 0
@@ -273,7 +283,7 @@ function bicgstabl_iterator!(x, A, b, comm::MPI.Comm, l::Int = 2;
     nrm = norm(residual)
 
     # For the least-squares problem
-    M = zeros(T, l + 1, l + 1)
+    M = DistributedArray(zeros(T, l + 1, l + 1), comm)
 
     # Stopping condition based on absolute and relative tolerance.
     tolerance = max(reltol * nrm, abstol)
@@ -283,44 +293,4 @@ function bicgstabl_iterator!(x, A, b, comm::MPI.Comm, l::Int = 2;
         Pl,
         γ, ω, σ, M
     )
-end
-
-function IterativeSolvers.bicgstabl!(x, A, b, comm::MPI.Comm, l = 2;
-                    abstol::Real = zero(real(eltype(b))),
-                    reltol::Real = sqrt(eps(real(eltype(b)))),
-                    max_mv_products::Int = size(A, 2),
-                    log::Bool = false,
-                    verbose::Bool = false,
-                    Pl = Identity(),
-                    kwargs...)
-    history = ConvergenceHistory(partial = !log)
-    history[:abstol] = abstol
-    history[:reltol] = reltol
-
-    # This doesn't yet make sense: the number of iters is smaller.
-    log && reserve!(history, :resnorm, max_mv_products)
-
-    # Actually perform iterative solve
-    iterable = bicgstabl_iterator!(x, A, b, l, comm; Pl = Pl,
-                                   abstol = abstol, reltol = reltol,
-                                   max_mv_products = max_mv_products, kwargs...)
-
-    if log
-        history.mvps = iterable.mv_products
-    end
-
-    for (iteration, item) = enumerate(iterable)
-        if log
-            nextiter!(history)
-            history.mvps = iterable.mv_products
-            push!(history, :resnorm, iterable.residual)
-        end
-        verbose && @printf("%3d\t%1.2e\n", iteration, iterable.residual)
-    end
-
-    verbose && println()
-    log && setconv(history, converged(iterable))
-    log && shrink!(history)
-
-    log ? (iterable.x, history) : iterable.x
 end
