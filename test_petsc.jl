@@ -20,8 +20,8 @@ function PETScsolve(xj::Vector, Sj::SparseMatrixCSC, bj::Vector, comm::MPI.Comm)
 end
 
 function juliasolve(xj, Sj, bj)
-    Si = ilu(Sj)
-    bicgstabl!(xj, Sj, bj, 1; reltol=1e-8, Pl=Si, log=false, verbose=false)
+    Si = ilu(Sj, τ=1e-2)
+    bicgstabl!(xj, Sj, bj, 1; reltol=1e-8, Pl=Si, log=true, verbose=iszero(MPI.Comm_rank(Sj.comm)))
     # res_vec = DistributedVector(zeros(Float64, size(Sj.loc, 1)), Sj.comm)
     # mul!(res_vec, Sj, xj)
     # res_vec.loc .= bj.loc .- res_vec.loc
@@ -100,15 +100,13 @@ comm = MPI.COMM_WORLD
 myrank = MPI.Comm_rank(comm)+1
 commsize  = MPI.Comm_size(comm)
 
-n = 500
+n = 1000
 dims = n^2
 
 
 myrange = getrange(n^2, myrank, commsize)
-S = Laplace_2D_5P_slice(n, myrange)
 
-
-A = DistributedMatrix(S, comm)
+A = DistributedMatrix(Laplace_2D_5P_slice(n, myrange), comm)
 println("assembled!")
 
 
