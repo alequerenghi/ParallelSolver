@@ -136,6 +136,7 @@ function separate_local_ghosts(
     Vo = sizehint!(Tv[], nghosts)
 
     ghostᵢ = 0
+    ghostmap  = Dict{Ti, Ti}()
     @inbounds for j ∈ 1:A.n
         if   startᵢ <= j <= stopᵢ
             jloc = j - startᵢ + 1
@@ -144,8 +145,9 @@ function separate_local_ghosts(
                 push!(Jd,  jloc)
                 push!(Vd, A.nzval[k])
             end
-        else
+        elseif !isempty(nzrange(A, j))
             ghostᵢ += 1
+            ghostmap[j] = ghostᵢ
             for k ∈ nzrange(A, j)
                 push!(Io, A.rowval[k])
                 push!(Jo, ghostᵢ)
@@ -157,7 +159,7 @@ function separate_local_ghosts(
 
     Mₗ = sparse(Id, Jd, Vd, N_local, N_local)
     Mₒ = sparse(Io, Jo, Vo, N_local, ghostᵢ)
-    return Mₗ, Mₒ
+    return Mₗ, Mₒ, ghostmap
 end
 
 struct DistributedMatrix{Tv,Ti}
@@ -166,7 +168,11 @@ struct DistributedMatrix{Tv,Ti}
     ghosts::Vector{Tv}
     recv_sizes::Vector{Ti}
     sendmap::Vector{Vector{Ti}}
+    recvmap::Vector{Vector{Ti}}
     sendbufs::Vector{Vector{Tv}}
+    cs::Vector{Ti}
+    ghostmap::Dict{Ti,Ti}
+    ghost_global::Vector{Ti}
     reqcount::Int
     comm::MPI.Comm
     function DistributedMatrix(
@@ -184,14 +190,19 @@ struct DistributedMatrix{Tv,Ti}
         ng      = scanghosts!(recvmap, A, cs, myrank)
         sendmap = build_sendmap(recvmap, cs, comm)
 
-        Mlocal, Mghosts = separate_local_ghosts(A, cs, ng, myrank)
+        Mlocal, Mghosts, ghostmap = separate_local_ghosts(A, cs, ng, myrank)
 
         ghosts    = Vector{Tv}(undef, size(Mghosts, 2))
         sendbufs  = [Vector{Tv}(undef, length(sendmap[i])) for i = 1:commsize]
         recv_sizes  = cumsum([1; length.(recvmap)])
+        ghost_global = Vector{Ti}(undef, length(ghostmap))
+        for (k, v) ∈ ghostmap
+            ghost_global[v] = k
+        end
+
         reqcount  = count(!isempty, recvmap) + count(!isempty, sendmap)
 
-        return new{Tv,Ti}(Mlocal, Mghosts, ghosts, recv_sizes, sendmap, sendbufs, reqcount, comm)
+        return new{Tv,Ti}(Mlocal, Mghosts, ghosts, recv_sizes, sendmap, recvmap, sendbufs, cs, ghostmap, ghost_global, reqcount, comm)
     end
 end
 
@@ -243,6 +254,96 @@ IncompleteLU.ilu(M::DistributedMatrix{Tv,Ti}; τ=1e-3) where {Tv,Ti} = ilu(M.loc
 
 Base.size(M::DistributedMatrix) = (M.loc.m, M.loc.n)
 Base.size(M::DistributedMatrix, d::Integer) = d == 1 ? M.loc.m : (2 == d ? M.loc.n : 1)
+
+function schwarz!(M::DistributedMatrix{Tv,Ti}; overlap=1) where {Tv,Ti}
+    comm = M.comm
+    commsize  = MPI.Comm_size(comm)
+    myrank    = MPI.Comm_rank(comm)+1
+    N_local = size(M.loc, 1)
+    nghosts = size(M.int, 2)
+    N_overlap = N_local + nghosts
+
+    I, J, V = findnz(M.loc)
+    Io, Jo, Vo = findnz(M.int)
+    append!(I, Io)
+    Jo .+= N_local
+    append!(J, Jo)
+    append!(V, Vo)
+
+    loc_T = sparse(M.loc')
+    int_T = sparse(M.int')
+    iout  = [Ti[] for _ ∈ 1:commsize]
+    jout  = [Ti[] for _ ∈ 1:commsize]
+    vout  = [Tv[] for _ ∈ 1:commsize]
+    offlocal  = M.cs[myrank]-1
+    send_counts = zeros(Ti, commsize)
+    for rank ∈ 1:commsize
+        for ilocal ∈ M.sendmap[rank]
+            nzcount = 0
+            for k ∈ nzrange(loc_T, ilocal)
+                nzcount += 1
+                j = loc_T.rowval[k]
+                v = loc_T.nzval[k]
+                push!(jout[rank], j + offlocal)
+                push!(vout[rank], v)
+            end
+            for k ∈ nzrange(int_T, ilocal)
+                nzcount += 1
+                j = int_T.rowval[k]
+                v = int_T.nzval[k]
+                push!(jout[rank], M.ghost_global[j])
+                push!(vout[rank], v)
+            end
+            push!(iout[rank], nzcount)
+            nnz_loc = length(nzrange(loc_T, ilocal))
+            nnz_int = length(nzrange(int_T, ilocal))
+            send_counts[rank] += nnz_loc + nnz_int
+        end
+    end
+    recv_counts = MPI.Alltoall(UBuffer(send_counts,1), comm)
+    iin   = [Vector{Ti}(undef, length(M.recvmap[r])) for r ∈ 1:commsize]
+    jin   = [Vector{Ti}(undef, nj) for nj in recv_counts]
+    vin   = [Vector{Tv}(undef, nv) for nv in recv_counts]
+    reqs = MPI.Request[]
+    for rank ∈ 1:commsize
+        if !isempty(iin[rank])
+            push!(reqs, MPI.Irecv!(iin[rank], comm; source=rank-1, tag=0))
+        end
+        if !isempty(jin[rank])
+            push!(reqs, MPI.Irecv!(jin[rank], comm; source=rank-1, tag=1))
+            push!(reqs, MPI.Irecv!(vin[rank], comm; source=rank-1, tag=2))
+        end
+    end
+    for rank ∈ 1:commsize
+        if !isempty(iout[rank])
+            push!(reqs, MPI.Isend(iout[rank], comm; dest=rank-1, tag=0))
+        end
+        if !isempty(jout[rank])
+            push!(reqs, MPI.Isend(jout[rank], comm; dest=rank-1, tag=1))
+            push!(reqs, MPI.Isend(vout[rank], comm; dest=rank-1, tag=2))
+        end
+    end
+    MPI.Waitall(reqs)
+    for rank ∈ 1:commsize
+        cum_icount = cumsum([1; iin[rank]])
+        for i ∈ 1:length(iin[rank])
+            ilocal = M.ghostmap[M.recvmap[rank][i]]
+            for k ∈ cum_icount[i]:cum_icount[i+1]-1
+                jlocal = jin[rank][k]
+                if M.cs[myrank] <= jlocal <= M.cs[myrank+1]-1
+                    push!(J, jlocal - M.cs[myrank]+1)
+                elseif jlocal ∈ keys(M.ghostmap)
+                    push!(J, N_local + M.ghostmap[jlocal])
+                else
+                    continue
+                end
+                push!(I, N_local + ilocal)
+                push!(V, vin[rank][k])
+            end
+        end
+    end
+    sparse(I, J, V, N_overlap, N_overlap)
+end
 
 function IterativeSolvers.bicgstabl_iterator!(x, A::DistributedMatrix, b, l::Int = 2;
                              Pl = Identity(),
