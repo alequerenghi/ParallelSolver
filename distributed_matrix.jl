@@ -195,8 +195,15 @@ struct DistributedMatrix{Tv,Ti}
         Mlocal, Mghosts, ghostmap = separate_local_ghosts(A, cs, ng, myrank)
 
         ghosts    = Vector{Tv}(undef, size(Mghosts, 2))
+        println(length(ghosts))
         sendbufs  = [Vector{Tv}(undef, length(sendmap[i])) for i = 1:commsize]
         recv_sizes  = cumsum([1; length.(recvmap)])
+        for r in 1:commsize
+            if r == myrank
+                println(recv_sizes)
+            end
+            MPI.Barrier(comm)
+        end
         ghost_global = Vector{Ti}(undef, length(ghostmap))
         for (k, v) ∈ ghostmap
             ghost_global[v] = k
@@ -225,7 +232,7 @@ end
 
 function ghostexchange!(
         ghosts::Vector{<:AbstractArray{Tv}},
-        source::Vector{Tv},
+        source::AbstractVector{Tv},
         sendbufs::Vector{Vector{Tv}},
         sendmap::Vector{Vector{Ti}},
         recv_sizes::Vector{<:Integer},
@@ -482,16 +489,20 @@ struct RASPreconditioner{Tv, Ti, F}
     end
 end
 
-function ghostexchange!(P::RASPreconditioner, x::Vector{Tv}) where {Tv}
-    ghostexchange!{Tv}(P.recvbufs, x, P.sendbufs, P.sendmap, P.recv_sizes, P.reqcount, P.comm)
+function ghostexchange!(P::RASPreconditioner, x::AbstractVector{Tv}) where {Tv}
+    reqs = ghostexchange!(P.recvbufs, x, P.sendbufs, P.sendmaps, P.recv_sizes, P.reqcount, P.comm)
+    MPI.Waitall(reqs)
+    commsize = length(P.recvmaps)
     for rank ∈ 1:commsize
-        ids = P.recvmap[rank]
+        ids = P.recvmaps[rank]
         data = P.recvbufs[rank]
         for j ∈ eachindex(ids)
             jglobal = ids[j]
-            P.buf[P.ghostmaps[j]] = data[j]
+            jghost  = P.ghostmaps[jglobal]
+            P.buf[P.N_local + jghost] = data[j]
         end
     end
+    println(P.buf)
     return nothing
 end
 
@@ -502,7 +513,7 @@ function LinearAlgebra.ldiv!(A::RASPreconditioner, b)
 
     ldiv!(A.Pl, A.buf)
 
-    copyto(b, 1, A.buf, 1, length(b))
+    copyto!(b, 1, A.buf, 1, length(b))
 end
 
 function IterativeSolvers.bicgstabl_iterator!(x, A::DistributedMatrix, b, l::Int = 2;

@@ -20,7 +20,7 @@ function PETScsolve(xj::Vector, Sj::SparseMatrixCSC, bj::Vector, comm::MPI.Comm)
 end
 
 function juliasolve(xj, Sj, bj)
-    Si = ilu(Sj, τ=1e-2)
+    Si = ilu(Sj, τ=1e-3)
     bicgstabl!(xj, Sj, bj, 1; reltol=1e-8, Pl=Si, log=true, verbose=iszero(MPI.Comm_rank(Sj.comm)))
     # res_vec = DistributedVector(zeros(Float64, size(Sj.loc, 1)), Sj.comm)
     # mul!(res_vec, Sj, xj)
