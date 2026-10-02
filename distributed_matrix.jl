@@ -299,8 +299,8 @@ end
 
 IncompleteLU.ilu(M::DistributedMatrix{Tv,Ti}; τ=1e-3) where {Tv,Ti} = ilu(M.loc; τ)
 
-Base.size(M::DistributedMatrix) = (M.loc.m, M.loc.n)
-Base.size(M::DistributedMatrix, d::Integer) = d == 1 ? M.loc.m : (2 == d ? M.loc.n : 1)
+Base.size(M::DistributedMatrix) = (M.cs[end]-1, M.cs[end]-1)
+Base.size(M::DistributedMatrix, d::Integer) = d <= 2 ? (M.cs[end]-1) : 1
 
 const COOType{Tv,Ti} = @NamedTuple begin
     i::Vector{Ti}
