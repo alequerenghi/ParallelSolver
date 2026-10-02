@@ -46,6 +46,18 @@ function LinearAlgebra.norm(
     return sqrt(dot(x, x))
 end
 
+# Gram matrix C = A' * B, reduced over all ranks (used by the MR step of bicgstabl)
+function LinearAlgebra.mul!(
+    C::Union{Matrix{T}, DistributedArray{T, 2}},
+    At::Adjoint{T, <:DistributedArray{T, 2}},
+    B::DistributedArray{T, 2}
+) where {T}
+    Cloc = local_slice(C)
+    mul!(Cloc, adjoint(parent(At).loc), B.loc)
+    MPI.Allreduce!(Cloc, MPI.SUM, B.comm)
+    return C
+end
+
 
 
 function scanghosts!(
@@ -549,6 +561,8 @@ function IterativeSolvers.bicgstabl_iterator!(x, A::DistributedMatrix, b, l::Int
     # Apply the left preconditioner
     ldiv!(Pl, residual)
 
+    # γ and M are small replicated quantities (identical on every rank); they are
+    # wrapped only because BiCGStabIterable ties their types to r_shadow / rs.
     γ = DistributedVector(zeros(T, l), comm)
     ω = σ = one(T)
 
