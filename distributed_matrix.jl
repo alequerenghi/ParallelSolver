@@ -6,51 +6,58 @@ using LinearAlgebra
 using SparseArrays
 import IncompleteLU: ILUFactorization
 
-struct DistributedArray{T,N,A <: AbstractArray{T,N}} <: AbstractArray{T,N}
+struct DistributedArray{T,N,A<:AbstractArray{T,N}} <: AbstractArray{T,N}
     loc::A
     comm::MPI.Comm
 end
 
 const DistributedVector{T,A} = DistributedArray{T,1,A}
 
-DistributedArray(loc::AbstractArray{T,N}, comm::MPI.Comm) where {T,N} = DistributedArray{T,N,typeof(loc)}(loc, comm)
-DistributedVector(loc::AbstractVector{T}, comm::MPI.Comm) where {T} = DistributedArray(loc, comm)
-DistributedVector{T}(loc::AbstractVector{T}, comm::MPI.Comm) where {T} = DistributedArray(loc, comm)
+DistributedArray(loc::AbstractArray{T,N}, comm::MPI.Comm) where {T,N} =
+    DistributedArray{T,N,typeof(loc)}(loc, comm)
+DistributedVector(loc::AbstractVector{T}, comm::MPI.Comm) where {T} =
+    DistributedArray(loc, comm)
+DistributedVector{T}(loc::AbstractVector{T}, comm::MPI.Comm) where {T} =
+    DistributedArray(loc, comm)
 
 Base.size(x::DistributedArray) = size(x.loc)
-Base.getindex(x::DistributedArray, I::Vararg{Int, N}) where {N} = getindex(x.loc, I...)
-Base.setindex!(x::DistributedArray, v, I::Vararg{Int, N}) where {N} = setindex!(x.loc, v, I...)
-Base.IndexStyle(::Type{<:DistributedArray{T, N, A}}) where {T, N, A} = IndexStyle(A)
-Base.similar(A::DistributedArray, ::Type{S}, dims::Dims) where {S} = 
+Base.getindex(x::DistributedArray, I::Vararg{Int,N}) where {N} =
+    getindex(x.loc, I...)
+Base.setindex!(x::DistributedArray, v, I::Vararg{Int,N}) where {N} =
+    setindex!(x.loc, v, I...)
+Base.IndexStyle(::Type{<:DistributedArray{T,N,A}}) where {T,N,A} = IndexStyle(A)
+Base.similar(A::DistributedArray, ::Type{S}, dims::Dims) where {S} =
     DistributedArray(similar(A.loc, S, dims), A.comm)
 
-@inline local_slice(v::AbstractArray) = v 
+@inline local_slice(v::AbstractArray) = v
 @inline local_slice(v::DistributedArray) = v.loc
 # @inline local_slice(v::SubArray{T,N,<:Vector}) where {T,N} = v
-@inline local_slice(v::SubArray{T,N,<:DistributedArray}) where {T,N} = view(v.parent.loc, parentindices(v)...)
+@inline local_slice(v::SubArray{T,N,<:DistributedArray}) where {T,N} =
+    view(v.parent.loc, parentindices(v)...)
 
 @inline get_comm(v::DistributedArray) = v.comm
-@inline get_comm(v::SubArray{T,N,<:DistributedArray}) where {T,N} = parent(v).comm
+@inline get_comm(v::SubArray{T,N,<:DistributedArray}) where {T,N} =
+    parent(v).comm
 
 function LinearAlgebra.dot(
-    x::Union{DistributedArray{T, N}, SubArray{T, N, <:DistributedArray}}, 
-    y::Union{DistributedArray{T, N}, SubArray{T, N, <:DistributedArray}}
-) where {T, N}
+    x::Union{DistributedArray{T,N},SubArray{T,N,<:DistributedArray}},
+    y::Union{DistributedArray{T,N},SubArray{T,N,<:DistributedArray}},
+) where {T,N}
     local_dot = dot(local_slice(x), local_slice(y))
     return MPI.Allreduce(local_dot, MPI.SUM, get_comm(x))
 end
 
 function LinearAlgebra.norm(
-    x::Union{DistributedArray{T, N}, SubArray{T, N, <:DistributedArray}}
-) where {T, N}
+    x::Union{DistributedArray{T,N},SubArray{T,N,<:DistributedArray}},
+) where {T,N}
     return sqrt(dot(x, x))
 end
 
 # Gram matrix C = A' * B, reduced over all ranks (used by the MR step of bicgstabl)
 function LinearAlgebra.mul!(
-    C::Union{Matrix{T}, DistributedArray{T, 2}},
-    At::Adjoint{T, <:DistributedArray{T, 2}},
-    B::DistributedArray{T, 2}
+    C::Union{Matrix{T},DistributedArray{T,2}},
+    At::Adjoint{T,<:DistributedArray{T,2}},
+    B::DistributedArray{T,2},
 ) where {T}
     Cloc = local_slice(C)
     mul!(Cloc, adjoint(parent(At).loc), B.loc)
@@ -81,7 +88,8 @@ function scanghosts!(
         if !isempty(ghosts)
             firstneighbor = searchsortedlast(cs, ghosts[1])
             lastneighbor = searchsortedlast(cs, ghosts[end])
-            ghostsperrank = ceil(Ti, length(ghosts) / (lastneighbor - firstneighbor + 1))
+            ghostsperrank =
+                ceil(Ti, length(ghosts) / (lastneighbor - firstneighbor + 1))
             for r ∈ firstneighbor:lastneighbor
                 sizehint!(recvmap[r], ghostsperrank)
             end
@@ -101,7 +109,7 @@ function build_sendmap(
     comm::MPI.Comm,
 ) where {Ti}
     commsize = MPI.Comm_size(comm)
-    myrank   = MPI.Comm_rank(comm)+1
+    myrank = MPI.Comm_rank(comm)+1
     recv_counts = length.(recvmap)
     send_counts = MPI.Alltoall(UBuffer(recv_counts, 1), comm)
     reqs = MPI.Request[]
@@ -137,7 +145,7 @@ function separate_local_ghosts(
     myrank::Int,
 ) where {Tv,Ti}
     startᵢ = cs[myrank]
-    stopᵢ  = cs[myrank+1] - 1
+    stopᵢ = cs[myrank+1] - 1
     local_count = nnz(A) - nghosts
 
     Id = sizehint!(Ti[], local_count)
@@ -149,13 +157,13 @@ function separate_local_ghosts(
     Vo = sizehint!(Tv[], nghosts)
 
     ghostᵢ = 0
-    ghostmap  = Dict{Ti, Ti}()
+    ghostmap = Dict{Ti,Ti}()
     @inbounds for j ∈ 1:A.n
-        if   startᵢ <= j <= stopᵢ
+        if startᵢ <= j <= stopᵢ
             jloc = j - startᵢ + 1
             for k ∈ nzrange(A, j)
                 push!(Id, A.rowval[k])
-                push!(Jd,  jloc)
+                push!(Jd, jloc)
                 push!(Vd, A.nzval[k])
             end
         elseif !isempty(nzrange(A, j))
@@ -193,86 +201,91 @@ struct DistributedMatrix{Tv,Ti}
         A::SparseMatrixCSC{Tv,Ti},
         comm::MPI.Comm,
     ) where {Tv,Ti}
-        commsize  = MPI.Comm_size(comm)
-        myrank    = MPI.Comm_rank(comm) + 1
-        m         = size(A, 1)
+        commsize = MPI.Comm_size(comm)
+        myrank = MPI.Comm_rank(comm) + 1
+        m = size(A, 1)
 
         sizes = MPI.Allgather(m, comm)
-        cs    = cumsum([1; sizes])
+        cs = cumsum([1; sizes])
 
         recvmap = [Ti[] for _ ∈ 1:commsize]
-        ng      = scanghosts!(recvmap, A, cs, myrank)
+        ng = scanghosts!(recvmap, A, cs, myrank)
         sendmap = build_sendmap(recvmap, cs, comm)
 
         Mlocal, Mghosts, ghostmap = separate_local_ghosts(A, cs, ng, myrank)
 
-        ghosts    = Vector{Tv}(undef, size(Mghosts, 2))
-        println(length(ghosts))
-        sendbufs  = [Vector{Tv}(undef, length(sendmap[i])) for i = 1:commsize]
-        recv_sizes  = cumsum([1; length.(recvmap)])
-        for r in 1:commsize
-            if r == myrank
-                println(recv_sizes)
-            end
-            MPI.Barrier(comm)
-        end
+        ghosts = Vector{Tv}(undef, size(Mghosts, 2))
+        sendbufs = [Vector{Tv}(undef, length(sendmap[i])) for i = 1:commsize]
+        recv_sizes = cumsum([1; length.(recvmap)])
         ghost_global = Vector{Ti}(undef, length(ghostmap))
         for (k, v) ∈ ghostmap
             ghost_global[v] = k
         end
 
-        reqcount  = count(!isempty, recvmap) + count(!isempty, sendmap)
-        recvbufs  = [view(ghosts, recv_sizes[r]:recv_sizes[r+1]-1) for r in 1:commsize]
+        reqcount = count(!isempty, recvmap) + count(!isempty, sendmap)
+        recvbufs =
+            [view(ghosts, recv_sizes[r]:(recv_sizes[r+1]-1)) for r = 1:commsize]
 
         return new{Tv,Ti}(
-                Mlocal,
-                Mghosts,
-                ghosts,
-                recv_sizes,
-                sendmap,
-                recvmap,
-                sendbufs,
-                recvbufs,
-                cs,
-                ghostmap,
-                ghost_global,
-                reqcount,
-                comm
+            Mlocal,
+            Mghosts,
+            ghosts,
+            recv_sizes,
+            sendmap,
+            recvmap,
+            sendbufs,
+            recvbufs,
+            cs,
+            ghostmap,
+            ghost_global,
+            reqcount,
+            comm,
         )
     end
 end
 
 function ghostexchange!(
-        ghosts::Vector{<:AbstractArray{Tv}},
-        source::AbstractVector{Tv},
-        sendbufs::Vector{Vector{Tv}},
-        sendmap::Vector{Vector{Ti}},
-        recv_sizes::Vector{<:Integer},
-        reqcount::Integer,
-        comm::MPI.Comm
-) where {Tv, Ti}
-    commsize  = MPI.Comm_size(comm)
+    ghosts::Vector{<:AbstractArray{Tv}},
+    source::AbstractVector{Tv},
+    sendbufs::Vector{Vector{Tv}},
+    sendmap::Vector{Vector{Ti}},
+    recv_sizes::Vector{<:Integer},
+    reqcount::Integer,
+    comm::MPI.Comm,
+) where {Tv,Ti}
+    commsize = MPI.Comm_size(comm)
 
     reqs = MPI.MultiRequest(reqcount)
     req = 1
-    for rank in 1:commsize
+    for rank = 1:commsize
         buf = ghosts[rank]
         if !isempty(buf)
-            MPI.Irecv!(buf, comm, reqs[req]; source=rank-1)
+            MPI.Irecv!(buf, comm, reqs[req]; source = rank-1)
             req += 1
         end
     end
     for rank ∈ 1:commsize
         if !isempty(sendbufs[rank])
             map!(i -> source[i], sendbufs[rank], sendmap[rank])
-            MPI.Isend(sendbufs[rank], comm, reqs[req]; dest=rank-1)
+            MPI.Isend(sendbufs[rank], comm, reqs[req]; dest = rank-1)
             req += 1
         end
     end
     return reqs
 end
 
-ghostexchange!(A::DistributedMatrix{Tv,Ti}, x::AbstractVector{Tv}) where {Tv,Ti} = ghostexchange!(A.recvbufs, x, A.sendbufs, A.sendmap, A.recv_sizes, A.reqcount, A.comm)
+ghostexchange!(
+    A::DistributedMatrix{Tv,Ti},
+    x::AbstractVector{Tv},
+) where {Tv,Ti} = ghostexchange!(
+    A.recvbufs,
+    x,
+    A.sendbufs,
+    A.sendmap,
+    A.recv_sizes,
+    A.reqcount,
+    A.comm,
+)
 
 function waitghostexchange(A, reqs)
     commsize = length(A.recvmap)
@@ -282,37 +295,48 @@ function waitghostexchange(A, reqs)
         data = A.recvbufs[rank]
         for j ∈ eachindex(ids)
             jglobal = ids[j]
-            jlocal  = A.ghostmap[jglobal]
+            jlocal = A.ghostmap[jglobal]
             A.buf[jlocal] = data[j]
         end
     end
     return nothing
 end
 
-function LinearAlgebra.mul!(y::AbstractVector{Tv}, M::DistributedMatrix{Tv,Ti}, x::AbstractVector{Tv}) where {Tv,Ti}
-    yloc  = local_slice(y)
-    xloc  = local_slice(x)
-    reqs  = ghostexchange!(M, xloc)
+function LinearAlgebra.mul!(
+    y::AbstractVector{Tv},
+    M::DistributedMatrix{Tv,Ti},
+    x::AbstractVector{Tv},
+) where {Tv,Ti}
+    yloc = local_slice(y)
+    xloc = local_slice(x)
+    reqs = ghostexchange!(M, xloc)
     mul!(yloc, M.loc, xloc)
     MPI.Waitall(reqs)
     mul!(yloc, M.int, M.ghosts, one(Tv), one(Tv))
     return y
 end
 
-function LinearAlgebra.mul!(y::AbstractVector{Tv}, M::DistributedMatrix{Tv,Ti}, x::AbstractVector{Tv}, α::Number, β::Number) where {Tv,Ti}
-    yloc  = local_slice(y)
-    xloc  = local_slice(x)
-    reqs  = ghostexchange!(M, xloc)
+function LinearAlgebra.mul!(
+    y::AbstractVector{Tv},
+    M::DistributedMatrix{Tv,Ti},
+    x::AbstractVector{Tv},
+    α::Number,
+    β::Number,
+) where {Tv,Ti}
+    yloc = local_slice(y)
+    xloc = local_slice(x)
+    reqs = ghostexchange!(M, xloc)
     mul!(yloc, M.loc, xloc, α, β)
     MPI.Waitall(reqs)
     mul!(yloc, M.int, M.ghosts, α, one(Tv))
     return y
 end
 
-IncompleteLU.ilu(M::DistributedMatrix{Tv,Ti}; τ=1e-3) where {Tv,Ti} = ilu(M.loc; τ)
+IncompleteLU.ilu(M::DistributedMatrix{Tv,Ti}; τ = 1e-3) where {Tv,Ti} =
+    ilu(M.loc; τ)
 
-Base.size(M::DistributedMatrix) = (M.cs[end]-1, M.cs[end]-1)
-Base.size(M::DistributedMatrix, d::Integer) = d <= 2 ? (M.cs[end]-1) : 1
+Base.size(M::DistributedMatrix) = size(M.loc)
+Base.size(M::DistributedMatrix, d::Integer) = size(M.loc, d)
 
 const COOType{Tv,Ti} = @NamedTuple begin
     i::Vector{Ti}
@@ -323,10 +347,18 @@ end
 const BufferType{Tv,Ti} = @NamedTuple{
     i::Vector{Vector{Ti}},
     j::Vector{Vector{Ti}},
-    v::Vector{Vector{Tv}}
+    v::Vector{Vector{Tv}},
 }
 
-function addrows!(send_counts, outbufs::BufferType{Tv,Ti}, offset, loc, interface, sendmap, ghostglobal) where {Tv,Ti}
+function addrows!(
+    send_counts,
+    outbufs::BufferType{Tv,Ti},
+    offset,
+    loc,
+    interface,
+    sendmap,
+    ghostglobal,
+) where {Tv,Ti}
     commsize = length(outbufs.i)
     for rank ∈ 1:commsize
         for ilocal ∈ sendmap[rank]
@@ -353,40 +385,74 @@ function addrows!(send_counts, outbufs::BufferType{Tv,Ti}, offset, loc, interfac
     end
 end
 
-function exchangerows!(inbufs::BufferType{Tv,Ti}, outbufs::BufferType{Tv,Ti}, comm::MPI.Comm) where {Tv,Ti}
-    commsize  = length(inbufs.i)
+function exchangerows!(
+    inbufs::BufferType{Tv,Ti},
+    outbufs::BufferType{Tv,Ti},
+    comm::MPI.Comm,
+) where {Tv,Ti}
+    commsize = length(inbufs.i)
     reqs = MPI.Request[]
     for rank ∈ 1:commsize
         if !isempty(inbufs.i[rank])
-            push!(reqs, MPI.Irecv!(inbufs.i[rank], comm; source=rank-1, tag=0))
+            push!(
+                reqs,
+                MPI.Irecv!(inbufs.i[rank], comm; source = rank-1, tag = 0),
+            )
         end
         if !isempty(inbufs.j[rank])
-            push!(reqs, MPI.Irecv!(inbufs.j[rank], comm; source=rank-1, tag=1))
-            push!(reqs, MPI.Irecv!(inbufs.v[rank], comm; source=rank-1, tag=2))
+            push!(
+                reqs,
+                MPI.Irecv!(inbufs.j[rank], comm; source = rank-1, tag = 1),
+            )
+            push!(
+                reqs,
+                MPI.Irecv!(inbufs.v[rank], comm; source = rank-1, tag = 2),
+            )
         end
     end
     for rank ∈ 1:commsize
         if !isempty(outbufs.i[rank])
-            push!(reqs, MPI.Isend(outbufs.i[rank], comm; dest=rank-1, tag=0))
+            push!(
+                reqs,
+                MPI.Isend(outbufs.i[rank], comm; dest = rank-1, tag = 0),
+            )
         end
         if !isempty(outbufs.j[rank])
-            push!(reqs, MPI.Isend(outbufs.j[rank], comm; dest=rank-1, tag=1))
-            push!(reqs, MPI.Isend(outbufs.v[rank], comm; dest=rank-1, tag=2))
+            push!(
+                reqs,
+                MPI.Isend(outbufs.j[rank], comm; dest = rank-1, tag = 1),
+            )
+            push!(
+                reqs,
+                MPI.Isend(outbufs.v[rank], comm; dest = rank-1, tag = 2),
+            )
         end
     end
     MPI.Waitall(reqs)
     return nothing
 end
 
-function appendghostrows!(data, inbufs::BufferType{Tv,Ti}, ghostmap, recvmaps, start, stop, N_local) where {Tv,Ti}
+function appendghostrows!(
+    recvmap_new,
+    data,
+    inbufs::BufferType{Tv,Ti},
+    ghostmap,
+    recvmaps,
+    cs,
+    start,
+    stop,
+    N_local,
+    remaining,
+) where {Tv,Ti}
     commsize = length(inbufs.i)
-    offset    = -start+1
+    offset = -start+1
+    newrows = length(ghostmap)
     for rank ∈ 1:commsize
-        is          = inbufs.i[rank]
-        js          = inbufs.j[rank]
-        vs          = inbufs.v[rank]
-        recvs       = recvmaps[rank]
-        cum_icount  = cumsum([1; is])
+        is         = inbufs.i[rank]
+        js         = inbufs.j[rank]
+        vs         = inbufs.v[rank]
+        recvs      = recvmaps[rank]
+        cum_icount = cumsum([1; is])
         for i ∈ 1:length(is)
             ilocal = ghostmap[recvs[i]]
             for k ∈ cum_icount[i]:(cum_icount[i+1]-1)
@@ -395,6 +461,13 @@ function appendghostrows!(data, inbufs::BufferType{Tv,Ti}, ghostmap, recvmaps, s
                     push!(data.j, jlocal + offset)
                 elseif jlocal ∈ keys(ghostmap)
                     push!(data.j, N_local + ghostmap[jlocal])
+                elseif 0 < remaining
+                    newrows += 1
+                    ghostmap[jlocal] = newrows
+                    push!(data.j, N_local + ghostmap[jlocal])
+
+                    owner = searchsortedlast(cs, jlocal)
+                    push!(recvmap_new[owner], jlocal)
                 else
                     continue
                 end
@@ -407,13 +480,13 @@ function appendghostrows!(data, inbufs::BufferType{Tv,Ti}, ghostmap, recvmaps, s
 end
 
 function schwarz!(
-        sendmaps::Vector{Vector{Ti}},
-        recvmaps::Vector{Vector{Ti}},
-        ghostmaps::Dict{Ti,Ti},
-        M::DistributedMatrix{Tv,Ti},
-        overlap::Integer
+    sendmaps::Vector{Vector{Ti}},
+    recvmaps::Vector{Vector{Ti}},
+    ghostmaps::Dict{Ti,Ti},
+    M::DistributedMatrix{Tv,Ti},
+    overlap::Integer,
 ) where {Tv,Ti}
-    comm = M.comm
+    comm      = M.comm
     commsize  = MPI.Comm_size(comm)
     myrank    = MPI.Comm_rank(comm)+1
     N_local   = size(M.loc, 1)
@@ -424,8 +497,8 @@ function schwarz!(
     recvmaps .= copy.(M.recvmap)
     merge!(ghostmaps, M.ghostmap)
 
-    I, J, V     = findnz(M.loc)
-    Io, Jo, Vo  = findnz(M.int)
+    I, J, V    = findnz(M.loc)
+    Io, Jo, Vo = findnz(M.int)
     append!(I, Io)
     append!(J, Jo .+ N_local)
     append!(V, Vo)
@@ -438,42 +511,72 @@ function schwarz!(
         [Ti[] for _ ∈ 1:commsize],
         [Ti[] for _ ∈ 1:commsize],
         [Tv[] for _ ∈ 1:commsize],
-       ))
+    ))
+    inbufs = BufferType{Tv,Ti}((
+        [Ti[] for _ ∈ 1:commsize],
+        [Ti[] for _ ∈ 1:commsize],
+        [Tv[] for _ ∈ 1:commsize],
+    ))
     offlocal = M.cs[myrank]-1
-    send_counts = zeros(Ti, commsize)
+    send_counts = Vector{Int}(undef, commsize)
+
+    sendmap_current = copy.(M.sendmap)
+    recvmap_current = copy.(M.recvmap)
+    recvmap_next    = [Ti[] for _ ∈ 1:commsize]
+
+    for iter ∈ 1:overlap
+        foreach(field -> foreach(empty!, field), outbufs)
+        foreach(empty!, recvmap_next)
+        fill!(send_counts, 0)
     addrows!(
         send_counts,
         outbufs,
         offlocal,
         loc_T,
         int_T,
-        M.sendmap,
-        M.ghost_global
+        sendmap_current,
+        M.ghost_global,
     )
 
-    recv_counts = MPI.Alltoall(UBuffer(send_counts,1), comm)
-    inbufs = BufferType{Tv,Ti}((
-        [Vector{Ti}(undef, length(M.recvmap[r])) for r ∈ 1:commsize],
-        [Vector{Ti}(undef, nj) for nj in recv_counts],
-        [Vector{Tv}(undef, nv) for nv in recv_counts],
-       ))
+    recv_counts = MPI.Alltoall(UBuffer(send_counts, 1), comm)
+    for rank ∈ 1:commsize
+        resize!(inbufs.i[rank], length(recvmap_current[rank]))
+        resize!(inbufs.j[rank], recv_counts[rank])
+        resize!(inbufs.v[rank], recv_counts[rank])
+    end
 
     exchangerows!(inbufs, outbufs, comm)
 
     appendghostrows!(
+        recvmap_next,
         A,
         inbufs,
-        M.ghostmap,
-        M.recvmap,
+        ghostmaps,
+        recvmap_current,
+        M.cs,
         M.cs[myrank],
         M.cs[myrank+1]-1,
-        N_local
+        N_local,
+        overlap - iter,
     )
 
+    if iter < overlap
+        sendmap_next = build_sendmap(recvmap_next, M.cs, comm)
+        for r in 1:commsize
+            append!(sendmaps[r], sendmap_next[r])
+            append!(recvmaps[r], recvmap_next[r])
+        end
+        sendmap_current .= copy.(sendmap_next)
+        recvmap_current .= copy.(recvmap_next)
+    end
+
+end
+
+    N_overlap = N_local + length(ghostmaps)
     sparse(I, J, V, N_overlap, N_overlap)
 end
 
-struct RASPreconditioner{Tv, Ti, F}
+struct RASPreconditioner{Tv,Ti,F}
     Pl::F
     N_local::Int
     buf::Vector{Tv}
@@ -485,24 +588,48 @@ struct RASPreconditioner{Tv, Ti, F}
     ghostmaps::Dict{Ti,Ti}
     reqcount::Int
     comm::MPI.Comm
-    function RASPreconditioner(M::DistributedMatrix{Tv,Ti}, overlap=2; τ=1e-3) where {Tv,Ti}
+    function RASPreconditioner(
+        M::DistributedMatrix{Tv,Ti},
+        overlap = 2;
+        τ = 1e-3,
+    ) where {Tv,Ti}
         commsize = MPI.Comm_size(M.comm)
-        sendmaps = [Ti[] for _ in 1:commsize]
-        recvmaps = [Ti[] for _ in 1:commsize]
-        ghostmaps = Dict{Ti, Ti}()
-        S   = schwarz!(sendmaps, recvmaps, ghostmaps, M, overlap)
+        sendmaps = [Ti[] for _ = 1:commsize]
+        recvmaps = [Ti[] for _ = 1:commsize]
+        ghostmaps = Dict{Ti,Ti}()
+        S = schwarz!(sendmaps, recvmaps, ghostmaps, M, overlap)
         sendbufs = [Vector{Tv}(undef, length(buf)) for buf ∈ sendmaps]
         recvbufs = [Vector{Tv}(undef, length(buf)) for buf ∈ recvmaps]
-        Pl = ilu(S; τ=τ)
-        buf = Vector{Tv}(undef, size(S,1))
-        reqcount  = count(!isempty, recvmaps) + count(!isempty, sendmaps)
+        Pl = ilu(S; τ = τ)
+        buf = Vector{Tv}(undef, size(S, 1))
+        reqcount = count(!isempty, recvmaps) + count(!isempty, sendmaps)
         recv_sizes = length.(recvmaps)
-        return new{Tv, Ti, ILUFactorization}(Pl, size(M.loc, 1), buf, recv_sizes, sendmaps, recvmaps, sendbufs, recvbufs, ghostmaps, reqcount, M.comm)
+        return new{Tv,Ti,ILUFactorization}(
+            Pl,
+            size(M.loc, 1),
+            buf,
+            recv_sizes,
+            sendmaps,
+            recvmaps,
+            sendbufs,
+            recvbufs,
+            ghostmaps,
+            reqcount,
+            M.comm,
+        )
     end
 end
 
 function ghostexchange!(P::RASPreconditioner, x::AbstractVector{Tv}) where {Tv}
-    reqs = ghostexchange!(P.recvbufs, x, P.sendbufs, P.sendmaps, P.recv_sizes, P.reqcount, P.comm)
+    reqs = ghostexchange!(
+        P.recvbufs,
+        x,
+        P.sendbufs,
+        P.sendmaps,
+        P.recv_sizes,
+        P.reqcount,
+        P.comm,
+    )
     MPI.Waitall(reqs)
     commsize = length(P.recvmaps)
     for rank ∈ 1:commsize
@@ -510,11 +637,10 @@ function ghostexchange!(P::RASPreconditioner, x::AbstractVector{Tv}) where {Tv}
         data = P.recvbufs[rank]
         for j ∈ eachindex(ids)
             jglobal = ids[j]
-            jghost  = P.ghostmaps[jglobal]
-            P.buf[P.N_local + jghost] = data[j]
+            jghost = P.ghostmaps[jglobal]
+            P.buf[P.N_local+jghost] = data[j]
         end
     end
-    println(P.buf)
     return nothing
 end
 
@@ -528,12 +654,17 @@ function LinearAlgebra.ldiv!(A::RASPreconditioner, b)
     copyto!(b, 1, A.buf, 1, length(b))
 end
 
-function IterativeSolvers.bicgstabl_iterator!(x, A::DistributedMatrix, b, l::Int = 2;
-                             Pl = Identity(),
-                             max_mv_products = size(A, 2),
-                             abstol::Real = zero(real(eltype(b))),
-                             reltol::Real = sqrt(eps(real(eltype(b)))),
-                             initial_zero = false)
+function IterativeSolvers.bicgstabl_iterator!(
+    x,
+    A::DistributedMatrix,
+    b,
+    l::Int = 2;
+    Pl = Identity(),
+    max_mv_products = size(A, 2),
+    abstol::Real = zero(real(eltype(b))),
+    reltol::Real = sqrt(eps(real(eltype(b)))),
+    initial_zero = false,
+)
     comm = A.comm
     T = eltype(x)
     n = size(A, 1)
@@ -574,9 +705,21 @@ function IterativeSolvers.bicgstabl_iterator!(x, A::DistributedMatrix, b, l::Int
     # Stopping condition based on absolute and relative tolerance.
     tolerance = max(reltol * nrm, abstol)
 
-    BiCGStabIterable(A, l, x, r_shadow, rs, us,
-        max_mv_products, mv_products, tolerance, nrm,
+    BiCGStabIterable(
+        A,
+        l,
+        x,
+        r_shadow,
+        rs,
+        us,
+        max_mv_products,
+        mv_products,
+        tolerance,
+        nrm,
         Pl,
-        γ, ω, σ, M
+        γ,
+        ω,
+        σ,
+        M,
     )
 end

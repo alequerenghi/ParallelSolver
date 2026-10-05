@@ -7,6 +7,7 @@ using PETSc
 
 include("poisson_2D_matrices.jl")
 include("distributed_matrix.jl")
+include("utilities.jl")
 
 
 function PETScsolve(xj::Vector, Sj::SparseMatrixCSC, bj::Vector, comm::MPI.Comm)
