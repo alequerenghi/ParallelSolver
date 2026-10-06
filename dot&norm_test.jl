@@ -1,4 +1,4 @@
-include("distributed_matrix.jl")
+using ParallelSolver
 
 function getrange(N::Integer, myrank::Integer, commsize::Integer)
     q, r = divrem(N, commsize)

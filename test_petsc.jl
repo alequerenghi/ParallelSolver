@@ -6,7 +6,7 @@ using IterativeSolvers
 using PETSc
 
 include("poisson_2D_matrices.jl")
-include("distributed_matrix.jl")
+using ParallelSolver
 include("utilities.jl")
 
 

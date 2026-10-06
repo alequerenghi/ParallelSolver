@@ -1,4 +1,4 @@
-include("distributed_matrix.jl")
+using ParallelSolver
 include("utilities.jl")
 include("poisson_2D_matrices.jl")
 
