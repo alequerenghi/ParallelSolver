@@ -5,8 +5,8 @@ end
 
 const DistributedVector{T,A} = DistributedArray{T,1,A}
 
-DistributedArray(loc::AbstractArray{T,N}, comm::MPI.Comm) where {T,N} =
-    DistributedArray{T,N,typeof(loc)}(loc, comm)
+# DistributedArray(loc::AbstractArray{T,N}, comm::MPI.Comm) where {T,N} =
+#     DistributedArray{T,N,typeof(loc)}(loc, comm)
 DistributedVector(loc::AbstractVector{T}, comm::MPI.Comm) where {T} =
     DistributedArray(loc, comm)
 DistributedVector{T}(loc::AbstractVector{T}, comm::MPI.Comm) where {T} =

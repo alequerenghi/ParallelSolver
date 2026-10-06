@@ -1,4 +1,3 @@
-
 using BenchmarkTools
 using SparseArrays
 using MPI
@@ -11,9 +10,9 @@ using ParallelSolver
 include("utilities.jl")
 
 function juliasolve(xj, Sj, bj)
-    Si = ilu(Sj)
-    # Si = RASPreconditioner(Sj, 1)
-    bicgstabl!(xj, Sj, bj, 1; reltol=1e-8, Pl=Si, log=true, verbose=iszero(MPI.Comm_rank(Sj.comm)))
+    # Si = ilu(Sj)
+    Si = RASPreconditioner(Sj, 3)
+    bicgstabl!(xj, Sj, bj, 2; reltol=1e-8, Pl=Si, log=true, verbose=iszero(MPI.Comm_rank(Sj.comm)))
     # res_vec = DistributedVector(zeros(Float64, size(Sj.loc, 1)), Sj.comm)
     # mul!(res_vec, Sj, xj)
     # res_vec.loc .= bj.loc .- res_vec.loc

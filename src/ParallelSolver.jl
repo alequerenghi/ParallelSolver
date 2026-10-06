@@ -1,6 +1,5 @@
 module ParallelSolver
 
-using Printf
 using IterativeSolvers
 using IncompleteLU
 using MPI
@@ -13,7 +12,7 @@ export DistributedArray, DistributedVector
 export RASPreconditioner
 
 include("distributedArray.jl")
-using ParallelSolver
+include("distributedMatrix.jl")
 include("schwarzDecomposition.jl")
 
 end

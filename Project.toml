@@ -1,9 +1,17 @@
+name = "ParallelSolver"
+uuid = "7ad0db9a-7d0f-4f25-802d-63f1085af4f5"
+version = "0.1.0"
+authors = ["alequerenghi <querenghialessandro@icloud.com>"]
+
 [deps]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 IncompleteLU = "40713840-3770-5561-ab4c-a76e7d0d7895"
 IterativeSolvers = "42fd0dbc-a981-5370-80f2-aaf504508153"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MPI = "da04e1cc-30fd-572f-bb4f-1f8673147195"
-PETSc = "ace2c81b-2b5f-4b1e-a30d-d662738edfe0"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [compat]
+LinearAlgebra = "1.13.0"
 MPI = "0.20.27"
+SparseArrays = "1.13.0"
