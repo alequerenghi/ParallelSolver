@@ -5,9 +5,9 @@ using IncompleteLU
 using IterativeSolvers
 using PETSc
 
-include("poisson_2D_matrices.jl")
+include("../poisson_2D_matrices.jl")
 using ParallelSolver
-include("utilities.jl")
+include("../utilities.jl")
 
 function juliasolve(xj, Sj, bj)
     # Si = ilu(Sj)

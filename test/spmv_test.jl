@@ -1,5 +1,5 @@
 using ParallelSolver
-include("poisson_2D_matrices.jl")
+include("../poisson_2D_matrices.jl")
 
 
 function getrange(N::Integer, myrank::Integer, commsize::Integer)

@@ -1,6 +1,6 @@
 using ParallelSolver
-include("utilities.jl")
-include("poisson_2D_matrices.jl")
+include("../utilities.jl")
+include("../poisson_2D_matrices.jl")
 
 MPI.Init()
 
