@@ -11,13 +11,10 @@ include("../poisson_2D_matrices.jl")
 include("../save_data.jl")
 include("../utilities.jl")
 
-function test(A, b, x, overlap, comm)
-    D = DistributedMatrix(A, comm)
-    if 1 > overlap
-        Pl = ilu(D)
-    else
-        Pl = RASPreconditioner(D, overlap)
-    end
+function test(D, b, x, overlap, comm)
+    
+    Pl = 1 > overlap ? ilu(D, τ=1e-2) : RASPreconditioner(D, overlap; τ=1e-1)
+    println(nnz(Pl.Pl)/nnz(D.loc))
     bicgstabl!(x, D, b, 1; reltol=1e-8, Pl=Pl, log=false, verbose=false)
 end
 
@@ -40,19 +37,20 @@ overlap = parse(Int, ARGS[2])
 myrange = getrange(n^2, myrank, commsize)
 
 A = Laplace_2D_9P(n, myrange)
+D = DistributedMatrix(A, comm)
 b = DistributedVector(A * rand(size(A,2)), comm)
 x = similar(b)
 
-bench = @benchmarkable test($A, $b, $x, $overlap, $comm) setup=fill!(x.loc, 0.0)
+bench = @benchmarkable test($D, $b, $x, $overlap, $comm) setup=fill!(x.loc, 0.0)
 t = run(bench; evals=1, seconds=6000, samples=100)
 
 ftotal = "execution_time.csv"
 
 savedata(ftotal, t, n, "poisson-9p", comm, overlap)
 
-bench = @benchmarkable setup_only($A, $overlap, $comm)
-t = run(bench; evals=1, seconds=60, samples=100)
-
-fsetup = "setup_time.csv"
-
-savedata(fsetup, t, n, "poisson-9p", comm, overlap)
+# bench = @benchmarkable setup_only($A, $overlap, $comm)
+# t = run(bench; evals=1, seconds=60, samples=100)
+# 
+# fsetup = "setup_time.csv"
+# 
+# savedata(fsetup, t, n, "poisson-9p", comm, overlap)

@@ -25,7 +25,7 @@ args = [
      "-sub_pc_type", "ilu",            # Local preconditioner on each rank
      "-sub_pc_factor_levels", "4",     # ILU(0)
     "-ksp_rtol", "1e-8",
-    # "-ksp_view"
+     "-ksp_view"
 ]
 
 comm = MPI.COMM_WORLD
@@ -52,6 +52,8 @@ I, J, V = findnz(S)
 nelements = length(S.nzval)
 LibPETSc.MatSetPreallocationCOO(petsclib, A, PetscInt(nelements), PetscInt.(I .-1 .+ rstart), PetscInt.(J .-1))
 LibPETSc.MatSetValuesCOO(petsclib, A, PetscScalar.(V), LibPETSc.INSERT_VALUES)
+
+PETSc.assemble!(A)
 
 # ── 3. Create Parallel RHS (b) and Solution (x) Vectors ─────────────
 b = LibPETSc.VecCreate(petsclib, comm)
@@ -85,20 +87,29 @@ x = similar(b)
 # end
 
 
-function testrun(A, x, b, petsclib, comm)
-    PETSc.assemble!(A)
+function testrun(memusage, A, x, b, petsclib, comm)
     # ── 4. Setup KSP Parallel Solver & Solve ─────────────────────────────
     ksp = PETSc.KSP(A)
     LibPETSc.KSPSetFromOptions(petsclib, ksp)
     LibPETSc.KSPSetUp(petsclib, ksp)
 
     PETSc.solve!(x, ksp, b)
+    push!(memusage, Sys.maxrss())
     PETSc.destroy!(ksp)
 end
 
-bench = @benchmarkable testrun($A, $x, $b, $petsclib, $comm) setup=fill!(x, 0.0)
-t = run(bench; samples=100, evals=1, seconds=100)
+startrss = Sys.maxrss()
+println(startrss/2^20)
 
+memoryusage = UInt64[]
+
+bench = @benchmarkable testrun($memoryusage, $A, $x, $b, $petsclib, $comm) setup=fill!(x, 0.0)
+t = run(bench; samples=100, evals=1, seconds=10)
+
+memoryusage .-= startrss
+
+avgmem = round(Int, mean(memoryusage))
+t.memory = avgmem
 savedata("petsc.csv", t, n, "poisson-9p", comm, overlap)
 
 
