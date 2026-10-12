@@ -25,7 +25,8 @@ args = [
      "-sub_pc_type", "ilu",            # Local preconditioner on each rank
      "-sub_pc_factor_levels", "4",     # ILU(0)
     "-ksp_rtol", "1e-8",
-     "-ksp_view"
+     # "-ksp_view",
+     # "-ksp_monitor",
 ]
 
 comm = MPI.COMM_WORLD
@@ -99,7 +100,6 @@ function testrun(memusage, A, x, b, petsclib, comm)
 end
 
 startrss = Sys.maxrss()
-println(startrss/2^20)
 
 memoryusage = UInt64[]
 

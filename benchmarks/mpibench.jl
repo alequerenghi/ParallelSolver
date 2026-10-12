@@ -1,3 +1,4 @@
+using LinearAlgebra
 using ParallelSolver
 using MPI
 using IncompleteLU
@@ -12,8 +13,9 @@ include("../save_data.jl")
 include("../utilities.jl")
 
 function test(D, b, x, overlap, comm)
+    τ=4e-2
     
-    Pl = 1 > overlap ? ilu(D, τ=1e-2) : RASPreconditioner(D, overlap; τ=1e-1)
+    Pl = 1 > overlap ? ilu(D; τ=τ) : RASPreconditioner(D, overlap; τ=τ)
     println(nnz(Pl.Pl)/nnz(D.loc))
     bicgstabl!(x, D, b, 1; reltol=1e-8, Pl=Pl, log=false, verbose=false)
 end
