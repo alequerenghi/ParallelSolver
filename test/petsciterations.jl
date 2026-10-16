@@ -30,7 +30,7 @@ function @main(args)
 
     iterations = testrun(A, x, b, petsclib, comm)
 
-    savedata("petsc_iterations.csv", iterations, n, "poisson-9p")
+    savedata("petsc_iterations.csv", iterations, n, "poisson-9p", comm, overlap)
 
     PETSc.destroy!(A)
     PETSc.destroy!(b)
